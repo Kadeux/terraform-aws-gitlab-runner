@@ -94,7 +94,7 @@ locals {
       runners_subnet_ids                = length(var.subnet_ids) > 0 ? var.subnet_ids : length(var.subnet_id) > 0 ? [var.subnet_id] : [var.subnet_id_runners]
       runners_aws_zone                  = data.aws_availability_zone.runners.name_suffix
       runners_instance_type             = var.docker_machine_instance_type
-      runners_instance_types            = length(var.docker_machine_instance_types) > 0 ?  var.docker_machine_instance_types : [var.docker_machine_instance_type]
+      runners_instance_types            = length(var.docker_machine_instance_types) > 0 ? var.docker_machine_instance_types : [var.docker_machine_instance_type]
       runners_spot_price_bid            = var.docker_machine_spot_price_bid == "on-demand-price" || var.docker_machine_spot_price_bid == null ? "" : var.docker_machine_spot_price_bid
       runners_ami                       = var.runners_executor == "docker+machine" ? data.aws_ami.docker-machine[0].id : ""
       runners_security_group_name       = var.runners_executor == "docker+machine" ? aws_security_group.docker_machine[0].name : ""
@@ -327,7 +327,7 @@ resource "aws_launch_template" "gitlab_runner_instance" {
 }
 
 resource "aws_key_pair" "fleet_key" {
-  count      = var.use_fleet == true && var.runners_executor == "docker+machine" ? 1 : 0
+  count = var.use_fleet == true && var.runners_executor == "docker+machine" ? 1 : 0
 
   key_name   = var.key_pair_name
   public_key = var.public_key
@@ -336,7 +336,7 @@ resource "aws_key_pair" "fleet_key" {
 resource "aws_launch_template" "gitlab_runners" {
   # checkov:skip=CKV_AWS_88:User can decide to add a public IP.
   # checkov:skip=CKV_AWS_79:User can decide to enable Metadata service V2. V2 is the default.
-  count = var.use_fleet == true && var.runners_executor == "docker+machine" ? 1 : 0
+  count       = var.use_fleet == true && var.runners_executor == "docker+machine" ? 1 : 0
   name_prefix = "${local.name_runner_agent_instance}-worker-"
 
   key_name               = aws_key_pair.fleet_key[0].key_name
