@@ -345,7 +345,7 @@ resource "aws_launch_template" "gitlab_runners" {
   update_default_version = true
 
   network_interfaces {
-    security_groups             = concat([aws_security_group.docker_machine[0].id])
+    security_groups = concat([aws_security_group.docker_machine[0].id])
   }
   tag_specifications {
     resource_type = "instance"
