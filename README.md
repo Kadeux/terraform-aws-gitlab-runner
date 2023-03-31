@@ -371,8 +371,9 @@ module "runner" {
 
 ### Scenario: Use of Spot Fleet
 
-Since spot instances can be taken over by AWS depending on the instance type and AZ you are using, yu may want multiple instances types in multiple AZs. This is where spot fleets come in, when there is no capacity on one instance type and one AZ, AWS will take the next instance type and so on. This update has been possible since [docker-machine](https://gitlab.com/cki-project/docker-machine/-/tree/v0.16.2-gitlab.19-cki.2) supports spot fleets.
+Since spot instances can be taken over by AWS depending on the instance type and AZ you are using, you may want multiple instances types in multiple AZs. This is where spot fleets come in, when there is no capacity on one instance type and one AZ, AWS will take the next instance type and so on. This update has been possible since the [fork](https://gitlab.com/cki-project/docker-machine/-/tree/v0.16.2-gitlab.19-cki.2) of docker-machine supports spot fleets.
 
+#### Configuration example
 ```hcl
 module "runner" {
   # https://registry.terraform.io/modules/npalm/gitlab-runner/aws/
@@ -384,7 +385,7 @@ module "runner" {
   vpc_id                   = module.vpc.vpc_id
   subnet_ids               = module.vpc.private_subnets
 
-  docker_machine_instance_types             = ["t3a.medium", "t3.medium", "c5a.large"]
+  docker_machine_instance_types             = ["t3a.medium", "t3.medium", "t2.medium"]
   use_fleet                                 = true
   public_key                                = "<ssh-public-key>"
   secure_parameter_store_runner_private_key = "<parameter-store-key-name>"
