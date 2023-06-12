@@ -53,6 +53,7 @@ locals {
 
   template_gitlab_runner = templatefile("${path.module}/template/gitlab-runner.tftpl",
     {
+      aws_region                                                   = var.aws_region
       gitlab_runner_version                                        = var.gitlab_runner_version
       docker_machine_version                                       = var.docker_machine_version
       docker_machine_download_url                                  = var.docker_machine_download_url
@@ -83,9 +84,9 @@ locals {
       gitlab_runner_project_id                                     = lookup(var.gitlab_runner_registration_config, "project_id", "")
       gitlab_runner_access_level                                   = lookup(var.gitlab_runner_registration_config, "access_level", "not_protected")
       sentry_dsn                                                   = var.sentry_dsn
-      public_key                                                   = var.use_fleet == true ? tls_private_key.fleet[0].public_key_openssh : ""
+      public_key                                                   = var.use_fleet == true || var.runners_executor == "docker-autoscaler" ? tls_private_key.key[0].public_key_openssh : ""
       use_fleet                                                    = var.use_fleet
-      private_key                                                  = var.use_fleet == true ? tls_private_key.fleet[0].private_key_pem : ""
+      private_key                                                  = var.use_fleet == true || var.runners_executor == "docker-autoscaler" ? tls_private_key.key[0].private_key_pem : ""
   })
 
   template_runner_config = templatefile("${path.module}/template/runner-config.tftpl",
@@ -152,12 +153,13 @@ locals {
       auth_type                         = var.auth_type_cache_sr
       use_fleet                         = var.use_fleet
       launch_template                   = var.use_fleet == true ? aws_launch_template.fleet_gitlab_runner[0].name : ""
+      autoscaling_group_name            = var.runners_executor == "docker-autoscaler" ? aws_autoscaling_group.autoscaler[0].name : ""
     }
   )
 }
 
 data "aws_ami" "docker-machine" {
-  count = var.runners_executor == "docker+machine" ? 1 : 0
+  count = var.runners_executor == "docker+machine" || var.runners_executor == "docker-autoscaler" ? 1 : 0
 
   most_recent = "true"
 
@@ -333,18 +335,18 @@ resource "aws_launch_template" "gitlab_runner_instance" {
   depends_on = [aws_cloudwatch_log_group.environment]
 }
 
-resource "tls_private_key" "fleet" {
-  count = var.use_fleet == true && var.runners_executor == "docker+machine" ? 1 : 0
+resource "tls_private_key" "key" {
+  count = (var.use_fleet == true && var.runners_executor == "docker+machine") || (var.runners_executor == "docker-autoscaler") ? 1 : 0
 
   algorithm = "RSA"
   rsa_bits  = 4096
 }
 
-resource "aws_key_pair" "fleet" {
-  count = var.use_fleet == true && var.runners_executor == "docker+machine" ? 1 : 0
+resource "aws_key_pair" "key" {
+  count = (var.use_fleet == true && var.runners_executor == "docker+machine") || (var.runners_executor == "docker-autoscaler") ? 1 : 0
 
-  key_name   = "${var.environment}-${var.fleet_key_pair_name}"
-  public_key = tls_private_key.fleet[0].public_key_openssh
+  key_name   = "${var.environment}-${var.key_pair_name}"
+  public_key = tls_private_key.key[0].public_key_openssh
 
   tags = local.tags
 }
@@ -355,7 +357,7 @@ resource "aws_launch_template" "fleet_gitlab_runner" {
   count       = var.use_fleet == true && var.runners_executor == "docker+machine" ? 1 : 0
   name_prefix = "${local.name_runner_agent_instance}-worker-"
 
-  key_name               = aws_key_pair.fleet[0].key_name
+  key_name               = aws_key_pair.key[0].key_name
   image_id               = data.aws_ami.docker-machine[0].id
   user_data              = base64gzip(var.runners_userdata)
   instance_type          = var.docker_machine_instance_types_fleet[0] # it will be override by the fleet
@@ -389,6 +391,107 @@ resource "aws_launch_template" "fleet_gitlab_runner" {
   tag_specifications {
     resource_type = "volume"
     tags          = local.tags
+  }
+
+  tags = local.tags
+
+  metadata_options {
+    http_tokens                 = var.docker_machine_instance_metadata_options.http_tokens
+    http_put_response_hop_limit = var.docker_machine_instance_metadata_options.http_put_response_hop_limit
+    instance_metadata_tags      = "enabled"
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# ignores: Autoscaling Groups Supply Tags --> we use a "dynamic" block to create the tags
+# ignores: Auto Scaling Group With No Associated ELB --> that's simply not true, as the EC2 instance contacts GitLab. So no ELB needed here.
+# kics-scan ignore-line
+resource "aws_autoscaling_group" "autoscaler" {
+  count                     = var.runners_executor == "docker-autoscaler" ? 1 : 0
+
+  name                      = "${var.environment}-as-group-docker-autoscaler"
+  vpc_zone_identifier       = length(var.subnet_id) > 0 ? [var.subnet_id] : var.subnet_ids_gitlab_runner
+  min_size                  = 0
+  max_size                  = 5
+  desired_capacity          = 0
+  health_check_grace_period = 0
+  max_instance_lifetime     = var.asg_max_instance_lifetime
+  enabled_metrics           = var.metrics_autoscaling
+
+  dynamic "tag" {
+    for_each = local.agent_tags
+
+    content {
+      key                 = tag.key
+      value               = tag.value
+      propagate_at_launch = true
+    }
+  }
+
+  launch_template {
+    id      = aws_launch_template.autoscaler[0].id
+    version = aws_launch_template.autoscaler[0].latest_version
+  }
+
+  instance_refresh {
+    strategy = "Rolling"
+    preferences {
+      min_healthy_percentage = 0
+    }
+    triggers = ["tag"]
+  }
+
+  timeouts {
+    delete = var.asg_delete_timeout
+  }
+  lifecycle {
+    ignore_changes = [min_size, max_size, desired_capacity]
+  }
+}
+
+resource "aws_launch_template" "autoscaler" {
+  # checkov:skip=CKV_AWS_88:User can decide to add a public IP.
+  # checkov:skip=CKV_AWS_79:User can decide to enable Metadata service V2. V2 is the default.
+  count       = var.runners_executor == "docker-autoscaler" ? 1 : 0
+  name_prefix = "${local.name_runner_agent_instance}-autoscaler-"
+
+  key_name               = aws_key_pair.key[0].key_name
+  image_id               = "ami-038b103b039a9f7ca" #data.aws_ami.docker-machine[0].id
+  user_data              = base64gzip(var.runners_userdata)
+  instance_type          = var.docker_machine_instance_type # it will be override by the fleet
+  update_default_version = true
+  ebs_optimized          = var.runners_ebs_optimized
+  monitoring {
+    enabled = var.runners_monitoring
+  }
+  block_device_mappings {
+    device_name = "/dev/sda1"
+
+    ebs {
+      volume_size = var.runners_root_size
+      volume_type = var.runners_volume_type
+    }
+  }
+
+  iam_instance_profile {
+    name = aws_iam_instance_profile.docker_machine[0].name
+  }
+
+  network_interfaces {
+    security_groups             = [aws_security_group.docker_machine[0].id]
+    associate_public_ip_address = !var.runners_use_private_address
+  }
+
+  tag_specifications {
+    resource_type = "instance"
+    tags          = local.agent_tags
+  }
+  tag_specifications {
+    resource_type = "volume"
+    tags          = local.agent_tags
   }
 
   tags = local.tags
@@ -480,6 +583,32 @@ resource "aws_iam_role_policy_attachment" "instance_kms_policy" {
   policy_arn = aws_iam_policy.instance_kms_policy[0].arn
 }
 
+################################################################################
+### Policy for the autoscaling group to use docker-autoscaler
+################################################################################
+resource "aws_iam_policy" "instance_docker_autoscaler_policy" {
+  count = var.runners_executor == "docker-autoscaler" ? 1 : 0
+
+  name        = "${local.name_iam_objects}-autoscaler"
+  path        = "/"
+  description = "Allow autoscaling group the ability to use docker-autoscaler."
+  policy = templatefile("${path.module}/policies/autoscaler.json",
+    {
+      autoscaling_group_arn = aws_autoscaling_group.autoscaler[0].arn
+      autoscaling_group_name = aws_autoscaling_group.autoscaler[0].name
+      partition = data.aws_partition.current.partition
+    }
+  )
+
+  tags = local.tags
+}
+
+resource "aws_iam_role_policy_attachment" "instance_docker_autoscaler_policy" {
+  count = var.runners_executor == "docker-autoscaler" ? 1 : 0
+
+  role       = var.create_runner_iam_role ? aws_iam_role.instance[0].name : local.aws_iam_role_instance_name
+  policy_arn = aws_iam_policy.instance_docker_autoscaler_policy[0].arn
+}
 
 ################################################################################
 ### Policies for runner agent instance to create docker machines via spot req.
@@ -562,7 +691,7 @@ resource "aws_iam_role_policy_attachment" "docker_machine_cache_instance" {
 ### docker machine instance policy
 ################################################################################
 resource "aws_iam_role" "docker_machine" {
-  count                = var.runners_executor == "docker+machine" ? 1 : 0
+  count                = var.runners_executor == "docker+machine" || var.runners_executor == "docker-autoscaler" ? 1 : 0
   name                 = "${local.name_iam_objects}-docker-machine"
   assume_role_policy   = length(var.docker_machine_role_json) > 0 ? var.docker_machine_role_json : templatefile("${path.module}/policies/instance-role-trust-policy.json", {})
   permissions_boundary = var.permissions_boundary == "" ? null : "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:policy/${var.permissions_boundary}"
@@ -573,7 +702,7 @@ resource "aws_iam_role" "docker_machine" {
 
 
 resource "aws_iam_instance_profile" "docker_machine" {
-  count = var.runners_executor == "docker+machine" ? 1 : 0
+  count = var.runners_executor == "docker+machine" || var.runners_executor == "docker-autoscaler" ? 1 : 0
   name  = "${local.name_iam_objects}-docker-machine"
   role  = aws_iam_role.docker_machine[0].name
   tags  = local.tags
@@ -583,7 +712,7 @@ resource "aws_iam_instance_profile" "docker_machine" {
 ### Add user defined policies
 ################################################################################
 resource "aws_iam_role_policy_attachment" "docker_machine_user_defined_policies" {
-  count = var.runners_executor == "docker+machine" ? length(var.docker_machine_iam_policy_arns) : 0
+  count = var.runners_executor == "docker+machine" || var.runners_executor == "docker-autoscaler" ? length(var.docker_machine_iam_policy_arns) : 0
 
   role       = aws_iam_role.docker_machine[0].name
   policy_arn = var.docker_machine_iam_policy_arns[count.index]
@@ -591,7 +720,7 @@ resource "aws_iam_role_policy_attachment" "docker_machine_user_defined_policies"
 
 ################################################################################
 resource "aws_iam_role_policy_attachment" "docker_machine_session_manager_aws_managed" {
-  count = (var.runners_executor == "docker+machine" && var.enable_docker_machine_ssm_access) ? 1 : 0
+  count = ((var.runners_executor == "docker+machine" || var.runners_executor == "docker-autoscaler") && var.enable_docker_machine_ssm_access) ? 1 : 0
 
   role       = aws_iam_role.docker_machine[0].name
   policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"

@@ -78,6 +78,11 @@ locals {
     }
   )
 
+#  runners_docker_autoscaler = templatefile("${path.module}/template/docker-autoscaler-config.tftpl", {
+#    runners_docker_autoscaler = var.runners_docker_autoscaler
+#    }
+#  )
+
   runners_pull_policies = var.runners_pull_policy != "" ? "[\"${var.runners_pull_policy}\"]" : "[\"${join("\",\"", var.runners_pull_policies)}\"]"
 
   /* determines if the docker machine executable adds the Name tag automatically (versions >= 0.16.2) */

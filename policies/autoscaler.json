@@ -1,0 +1,33 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "autoscaling:SetDesiredCapacity",
+                "autoscaling:TerminateInstanceInAutoScalingGroup"
+            ],
+            "Resource": "${autoscaling_group_arn}"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "autoscaling:DescribeAutoScalingGroups",
+                "ec2:DescribeInstances"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ec2-instance-connect:SendSSHPublicKey"
+            ],
+            "Resource": "arn:aws:ec2:eu-west-3:183128260099:instance/*",
+            "Condition": {
+                "StringEquals": {
+                    "ec2:ResourceTag/aws:autoscaling:groupName": "${autoscaling_group_name}"
+                }
+            }
+        }
+    ]
+}

@@ -7,6 +7,16 @@ fi
 PARENT_INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .instanceId)
 PARENT_TAG="gitlab-runner-parent-id,$PARENT_INSTANCE_ID"
 
+if [[ "${runners_executor}" == "docker-autoscaler" ]]
+then
+  wget https://gitlab.com/gitlab-org/fleeting/fleeting-plugin-aws/-/releases/v0.3.0/downloads/fleeting-plugin-aws-linux-386
+  mv fleeting-plugin-aws-linux-386 /usr/local/bin/fleeting-plugin-aws
+  export PATH=$PATH:/usr/local/bin
+  chmod +x /usr/local/bin/fleeting-plugin-aws
+  mkdir ~/.aws
+  echo "[default]" > ~/.aws/config
+  echo "region = ${aws_region}" >> ~/.aws/config
+fi
 mkdir -p /etc/gitlab-runner
 cat > /etc/gitlab-runner/config.toml <<- EOF
 
@@ -83,7 +93,7 @@ fi
 
 sed -i.bak s/__REPLACED_BY_USER_DATA__/$token/g /etc/gitlab-runner/config.toml
 
-if [[ "${use_fleet}" == "true" ]]
+if [[ "${use_fleet}" == "true" ]] || [[ "${runners_executor}" == "docker-autoscaler" ]]
 then
   echo "${public_key}" > /root/.ssh/id_rsa.pub
   echo "${private_key}" > /root/.ssh/id_rsa
@@ -103,7 +113,7 @@ sed -i.bak s,__SENTRY_DSN_REPLACED_BY_USER_DATA__,"$ssm_sentry_dsn",g /etc/gitla
 
 ${pre_install}
 
-if [[ "${runners_executor}" == "docker" ]]
+if [[ "${runners_executor}" == "docker" ]] || [[ "${runners_executor}" == "docker-autoscaler" ]]
 then
   echo 'installing docker'
   if grep -q ':2$' /etc/system-release-cpe  ; then

@@ -49,8 +49,8 @@ variable "metrics_autoscaling" {
   default     = null
 }
 
-variable "fleet_key_pair_name" {
-  description = "The name of the key pair used by the runner to connect to the docker-machine executors."
+variable "key_pair_name" {
+  description = "The name of the key pair used by the runner to connect to the docker-machine/docker-autoscaler executors."
   type        = string
   default     = "fleet-key"
 }
@@ -149,13 +149,13 @@ variable "runners_userdata" {
 }
 
 variable "runners_executor" {
-  description = "The executor to use. Currently supports `docker+machine` or `docker`."
+  description = "The executor to use. Currently supports `docker+machine`, `docker` or `docker-autoscaler."
   type        = string
   default     = "docker+machine"
 
   validation {
-    condition     = contains(["docker+machine", "docker"], var.runners_executor)
-    error_message = "The executor currently supports `docker+machine` or `docker`."
+    condition     = contains(["docker+machine", "docker", "docker-autoscaler"], var.runners_executor)
+    error_message = "The executor currently supports `docker+machine`, `docker` or `docker-autoscaler."
   }
 }
 
